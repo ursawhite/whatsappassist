@@ -20,3 +20,7 @@ build/
 .wwebjs_auth/
 .wwebjs_cache/
 data/known_groups.json
+baileys_auth_info
+
+# Temp directories for processing
+temp/

@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model MediaCache {
+  id        String   @id // mediaKey
+  data      String   // base64 encoded media data
+  mimetype  String
+  filename  String?
+  timestamp DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Add index for efficient expiry queries
+  @@index([timestamp])
+  @@map("media_cache")
+}
+
+model MediaMetadata {
+  id        String   @id // mediaKey
+  mimetype  String?
+  filename  String?
+  timestamp DateTime @default(now())
+  // Additional metadata fields stored as native JSON (PostgreSQL)
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([timestamp])
+  @@map("media_metadata")
+}
+
+model MediaParsedResults {
+  id          String   @id // mediaKey
+  summary     String   // Parsed text content
+  frameFiles  String[] // Array of frame file paths (for videos)
+  frameTexts  String   // OCR text from frames
+  mediaKey    String   // Reference to the media
+  mimetype    String   // Media type
+  timestamp   DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([timestamp])
+  @@map("media_parsed_results")
+}
+
+model KnownGroup {
+  id        String   @id // groupId
+  createdAt DateTime @default(now())
+
+  @@map("known_groups")
+}
+
+model WaSession {
+  id        String   @id @default("default")
+  creds     Json
+  keys      Json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("wa_session")
+}
+
+model SourceDomain {
+  id          String   @id @default(cuid())
+  domain      String   @unique // e.g., "*.kompas.com"
+  name        String   // e.g., "Kompas"
+  description String?  // Optional description
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("source_domains")
+}

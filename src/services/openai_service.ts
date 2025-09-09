@@ -1,11 +1,8 @@
 import OpenAI from 'openai';
-
-if (!process.env.OPEN_AI_KEY) {
-  throw new Error('OPEN_AI_KEY environment variable is required');
-}
+import { OPENAI_API_KEY } from '../utils/env.js';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPEN_AI_KEY,
+  apiKey: OPENAI_API_KEY,
 });
 
 export async function analyzeImageWithGPT4(imageBuffer: Buffer): Promise<string> {

@@ -117,7 +117,6 @@ export async function extractTextFromImage(imageData: string): Promise<string> {
 }
 
 import { dbMediaCache } from '../utils/db_media_cache';
-import { dbParsedResults } from '../utils/db_parsed_results';
 import { promptData } from "../utils/prompt";
 
 // Global error handler for unhandled promise rejections
@@ -149,76 +148,19 @@ export async function parseMessage(message: any): Promise<any> {
     let messageMediaKey: string | undefined;
     const rawData = (message as any)._data || {};
 
-    // Get media key from the message first
-    messageMediaKey = rawData.mediaKey || rawData.quotedMsg?.mediaKey;
-    console.log("messageMediaKey", messageMediaKey);
-
-    // FIRST: Check if we already have parsed results for this media (regardless of media source)
-    if (messageMediaKey) {
-      const cachedParsedResult = await dbParsedResults.get(messageMediaKey);
-      if (cachedParsedResult) {
-        console.log("✅ Using cached parsed results - skipping media processing");
-        return {
-          summary: cachedParsedResult.summary,
-          frameFiles: cachedParsedResult.frameFiles,
-          frameTexts: cachedParsedResult.frameTexts,
-          mediaKey: messageMediaKey
-        };
-      }
-    }
-
     // Accept directly provided media object (from Baileys pipeline)
     if ((message as any).media && (message as any).media.mimetype && (message as any).media.data) {
       media = (message as any).media;
-      // Cache directly provided media
-      if (media && messageMediaKey) {
-        try {
-          await dbMediaCache.set(messageMediaKey, media);
-          await dbMediaCache.setMetadata({
-            mediaKey: messageMediaKey,
-            mimetype: media.mimetype,
-            filename: media.filename,
-            timestamp: new Date()
-          });
-          console.log("✅ Cached directly provided media in database");
-        } catch (cacheError) {
-          console.error("Error caching directly provided media:", cacheError);
-          // Continue even if caching fails
-        }
-      }
     }
 
     // Check if we have cached media passed in
     if ((message as any).cachedMedia) {
       console.log("Using provided cached media");
       media = (message as any).cachedMedia;
-      // Ensure cached media is also stored in database cache
-      if (media && messageMediaKey) {
-        try {
-          await dbMediaCache.set(messageMediaKey, media);
-          await dbMediaCache.setMetadata({
-            mediaKey: messageMediaKey,
-            mimetype: media.mimetype,
-            filename: media.filename,
-            timestamp: new Date()
-          });
-          console.log("✅ Cached provided media in database");
-        } catch (cacheError) {
-          console.error("Error caching provided media:", cacheError);
-          // Continue even if caching fails
-        }
-      }
     } else if (message.hasMedia) {
-      
-      // Try to get from cache first if we have a key
-      if (messageMediaKey) {
-        const cachedMedia = await dbMediaCache.get(messageMediaKey);
-        if (cachedMedia) {
-          console.log("Using cached media data");
-          media = cachedMedia;
-        }
-      }
-      
+      // Get media key from the message
+      messageMediaKey = rawData.mediaKey || rawData.quotedMsg?.mediaKey;
+      console.log("messageMediaKey", messageMediaKey);
       // Try to get from cache first if we have a key
       if (messageMediaKey) {
         const cachedMedia = await dbMediaCache.get(messageMediaKey);
@@ -282,7 +224,22 @@ export async function parseMessage(message: any): Promise<any> {
       throw new Error(`File terlalu besar. Maksimal ${Math.round(maxSize / 1024 / 1024)}MB untuk ${fileType}.`);
     }
 
-    // Media caching is now handled in the media retrieval section above
+    // Store metadata and media in cache if we have media
+    if (media) {
+      const mediaKeyToUse = rawData.mediaKey || (media as any).mediaKey;
+      if (mediaKeyToUse) {
+        // Store metadata
+        await dbMediaCache.setMetadata({
+          mediaKey: mediaKeyToUse,
+          mimetype: media.mimetype,
+          filename: media.filename,
+          timestamp: new Date()
+        });
+
+        // Store media content
+        await dbMediaCache.set(mediaKeyToUse, media);
+      }
+    }
 
     console.log("message", message);
     console.log("media", media);
@@ -294,7 +251,8 @@ export async function parseMessage(message: any): Promise<any> {
       case "video/quicktime":
         console.log("Processing video...");
         // Get timestamp from cache if available
-        const metadata = messageMediaKey ? await dbMediaCache.getMetadata(messageMediaKey) : null;
+        const mediaKeyToUse = rawData.mediaKey || (media as any).mediaKey;
+        const metadata = mediaKeyToUse ? await dbMediaCache.getMetadata(mediaKeyToUse) : null;
         // Normalize timestamp that may be Date | string | number | undefined
         const rawTimestamp: any = metadata?.timestamp;
         const timestamp = (() => {
@@ -314,11 +272,11 @@ export async function parseMessage(message: any): Promise<any> {
         // Check if we already have processed this video
         if (fs.existsSync(videoPath) && fs.existsSync(framesDir)) {
           console.log("Using existing processed video assets...");
-          frameFiles = fs.readdirSync(framesDir)
+          const frameFiles = fs.readdirSync(framesDir)
             .filter(file => file.endsWith('.jpg'))
             .map(file => path.join(framesDir, file));
 
-          frameTexts = '';
+          let frameTexts = '';
           for (const framePath of frameFiles) {
             const frameBuffer = fs.readFileSync(framePath);
             const frameText = await extractTextFromImage(frameBuffer.toString('base64'));
@@ -362,14 +320,14 @@ export async function parseMessage(message: any): Promise<any> {
         // Check if content is related to news/hoax
         const isNewsRelated = await askingAI({
           input: allText,
-          prompt: "Analyze if this content is related to news or claims that need fact-checking. Return only 'YES' if it's related to news/claims that need verification, or 'NO' if it's just casual conversation, entertainment, or unrelated content."
+          prompt: "env. Return only 'YES' if it's related to news/claims that need verification, or 'NO' if it's just casual conversation, entertainment, or unrelated content."
         });
 
         if (isNewsRelated.trim() === 'NO') {
           console.log("Content not related to news/hoax, extracting frames...");
 
           // Check if we have cached frames and OCR results
-          frameFiles = [];
+          let frameFiles: string[] = [];
           let cachedOCRResults = '';
           
           if (messageMediaKey) {
@@ -423,7 +381,7 @@ export async function parseMessage(message: any): Promise<any> {
           }
 
           // If we don't have cached OCR results, process frames
-          frameTexts = cachedOCRResults;
+          let frameTexts = cachedOCRResults;
           if (!frameTexts && frameFiles.length > 0) {
             frameTexts = '';
             for (const framePath of frameFiles) {
@@ -441,24 +399,13 @@ export async function parseMessage(message: any): Promise<any> {
               }
             }
             
-            // Cache frames and OCR results for future use
-            if (messageMediaKey && frameFiles.length > 0) {
-              try {
-                await dbMediaCache.set(`${messageMediaKey}_frames`, frameFiles);
-                await dbMediaCache.set(`${messageMediaKey}_ocr_results`, frameTexts);
-                console.log("✅ Cached video frames and OCR results");
-              } catch (cacheError) {
-                console.error("Error caching frames and OCR results:", cacheError);
-                // Continue even if caching fails
-              }
-            }
+
           }
           summary = frameTexts;
-          break;
+          return { summary: frameTexts, frameFiles, frameTexts, mediaKey: messageMediaKey };
         } else {
           summary = allText;
-          frameFiles = [];
-          frameTexts = '';
+          return { summary: allText, frameFiles: [], frameTexts: '', mediaKey: messageMediaKey };
         }
 
         break;
@@ -487,32 +434,12 @@ ${textFromOCR}`;
         return "❌ Tipe media tidak didukung: " + media.mimetype;
     }
     console.log("summary", summary);
-    
-    const result = {
+    return {
       summary: summary || "❌ Tidak ada konten yang dapat dianalisis dari media ini.",
-      frameFiles: frameFiles || [],
-      frameTexts: frameTexts || '',
+      frameFiles: [],
+      frameTexts: '',
       mediaKey: messageMediaKey
     };
-
-    // Cache the parsed results if we have a mediaKey
-    if (messageMediaKey && media) {
-      try {
-        await dbParsedResults.set(messageMediaKey, {
-          summary: result.summary,
-          frameFiles: result.frameFiles,
-          frameTexts: result.frameTexts,
-          mediaKey: messageMediaKey,
-          mimetype: media.mimetype
-        });
-        console.log("✅ Cached parsed results for mediaKey:", messageMediaKey);
-      } catch (cacheError) {
-        console.error("Error caching parsed results:", cacheError);
-        // Continue even if caching fails
-      }
-    }
-
-    return result;
   } catch (error) {
     console.error("Gagal membaca media:", error);
     return "❌ Gagal membaca media: ";

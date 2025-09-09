@@ -16,20 +16,36 @@ const topics: string[] = [
   "overtime",
 ];
 
+const MAX_PDF_SIZE = 50 * 1024 * 1024; // 50MB limit
+
 export async function analyzePDF(msg: any): Promise<string> {
   if (!msg.hasMedia) {
     return "⚠️ No media attached.";
   }
 
-  const media = await msg.downloadMedia();
-  const fileType = mime.extension(media.mimetype);
+  try {
+    const media = await msg.downloadMedia();
+    const fileType = mime.extension(media.mimetype);
 
-  if (fileType !== "pdf") {
-    return `⚠️ Only PDFs are supported.`;
-  }
+    if (fileType !== "pdf") {
+      return `⚠️ Only PDFs are supported.`;
+    }
 
-  const filePath = `./received.pdf`;
-  fs.writeFileSync(filePath, media.data, { encoding: "base64" });
+    // Check file size to prevent OOM
+    const pdfBuffer = Buffer.from(media.data, "base64");
+    if (pdfBuffer.length > MAX_PDF_SIZE) {
+      return `⚠️ PDF terlalu besar. Maksimal ${Math.round(MAX_PDF_SIZE / 1024 / 1024)}MB.`;
+    }
+
+    const filePath = `./received.pdf`;
+    
+    try {
+      fs.writeFileSync(filePath, media.data, { encoding: "base64" });
+      console.log(`✅ PDF saved: ${filePath} (${Math.round(pdfBuffer.length / 1024 / 1024)}MB)`);
+    } catch (fsError) {
+      console.error("File system error saving PDF:", fsError);
+      return "❌ Gagal menyimpan PDF. Mungkin disk penuh atau tidak ada izin akses.";
+    }
 
   try {
     const data = await parsePDF(filePath);
@@ -63,7 +79,20 @@ export async function analyzePDF(msg: any): Promise<string> {
 
     return response.data?.choices?.[0]?.message?.content || "";
   } catch (err) {
-    console.log(err);
+    console.log("PDF processing error:", err);
     return `❌ Error processing PDF.`;
+  } finally {
+    // Clean up temporary file
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (cleanupError) {
+      console.error("Error cleaning up PDF file:", cleanupError);
+    }
+  }
+  } catch (error) {
+    console.error("PDF analysis error:", error);
+    return `❌ Error analyzing PDF: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
 }
